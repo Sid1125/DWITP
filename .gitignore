@@ -1,0 +1,100 @@
+# DWITP .gitignore
+
+# Environment files
+.env
+.env.local
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Terraform
+*.tfstate
+*.tfstate.backup
+.terraform/
+terraform.tfvars
+
+# Docker
+*.tar
+*.tar.gz
+
+# Logs
+*.log
+/var/log/
+
+# Audit
+audit.log
+
+# SpaCy models (downloaded at build)
+/usr/lib/python3.*/site-packages/en_core_web_*
+!src/analysis/*.py
+
+# Secrets (never commit)
+**/secrets/
+*.pem
+*.key
+*.cert
+config/dread_cookies.txt
+
+# Test artifacts
+.htmlcov
+.coverage
+coverage.xml
+.pytest_cache/
+.pytest_tmp/
+__pycache__/
+
+# Temp & scratch files
+tmp_*.py
+tmp_*.json
+tmp-*.py
+tmp-*.json
+tmp-*.txt
+write_report.py
+infra/*.py
+infra/*.html
+infra/*.json
+
+# Microsoft Office temp files
+~$*.docx
+~$*.xlsx
+~WRL*.tmp
+
+# Design & governance docs (generated/static snapshots — not source code)
+AI-001_AI_Governance_and_Safety.md
+ARCH-001_System_Architecture.md
+DEV-001_Development_Standard.md
+Dwitp_vibe_security_spec.md
+INTEL-001_Intelligence_Requirements.md
+INTEL-002_Telegram_Group_Intelligence.md
+IR-001_Incident_Response_Playbook.md
+PRESENTATION.md
+TELEGRAM.md
+THREAT_LEXICON.md
+features.md
+DWITP_Project_Report.docx
+
+# Session context (auto-generated)
+DWITP_context.md

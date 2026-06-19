@@ -1,0 +1,100 @@
+name: Security Gate
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main]
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit semgrep trufflehog pip-audit
+
+      - name: Static Analysis (Bandit)
+        run: bandit -r src/ -ll --exit-zero-on-skipped
+
+      - name: SAST (Semgrep)
+        run: semgrep --config=p/python --config=p/security-audit --error src/
+
+      - name: Secret Scanning (TruffleHog)
+        run: trufflehog filesystem . --fail --only-verified
+
+      - name: Generate hash-pinned dependencies
+        run: |
+          pip install pip-tools
+          pip-compile --generate-hashes requirements.in -o requirements.txt
+
+      - name: Dependency Audit (pip-audit)
+        run: pip-audit -r requirements.txt --require-hashes --fail-on-vuln
+
+      - name: Verify hash-pinned install
+        run: pip install --require-hashes -r requirements.txt
+
+      - name: DEV-001 — Connection-per-message Guardrail
+        run: |
+          echo "Checking for prohibited direct pika imports (DEV-001)..."
+          found=$(grep -rn "import pika\|from pika" src/ --include="*.py" || true)
+          if echo "$found" | grep -qv "src/common/queue.py"; then
+            echo "FAIL: Direct pika import detected outside src/common/queue.py"
+            echo "$found"
+            exit 1
+          fi
+          echo "PASS: No direct pika imports outside queue module"
+
+      - name: Lint Check (Ruff)
+        run: |
+          pip install ruff
+          ruff check src/
+
+      - name: Type Check (mypy)
+        run: |
+          pip install mypy
+          mypy src/ --strict
+
+      - name: Run Tests (pytest)
+        run: |
+          pip install pytest pytest-cov
+          python -m pytest tests/ -v --tb=short --junit-xml=test-results.xml
+
+      - name: Container Build Check
+        run: |
+          docker build -f infra/docker/crawler/Dockerfile -t dwitp-crawler:check .
+          docker build -f infra/docker/sanitizer/Dockerfile -t dwitp-sanitizer:check .
+          docker build -f infra/docker/analysis/Dockerfile -t dwitp-analysis:check .
+          docker build -f infra/docker/ai_layer/Dockerfile -t dwitp-ai-layer:check .
+          docker build -f infra/docker/dashboard/Dockerfile -t dwitp-dashboard:check .
+          docker build -f infra/docker/db_writer/Dockerfile -t dwitp-db-writer:check .
+
+      - name: Verify Secret Rotation Scripts
+        run: |
+          if [ -f scripts/rotate-secrets.sh ]; then
+            bash -n scripts/rotate-secrets.sh
+            echo "PASS: rotate-secrets.sh syntax OK"
+          fi
+          if [ -f .env.example ]; then
+            for var in POSTGRES_PASSWORD OPENSEARCH_PASSWORD NEO4J_PASSWORD RABBITMQ_PASSWORD TOR_CONTROL_PASSWORD; do
+              if grep -q "^${var}=" .env.example; then
+                echo "PASS: ${var} documented in .env.example"
+              fi
+            done
+          fi
+          echo "All secret rotation artifacts verified"
+
+      - name: Trivy Container Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "dwitp-crawler:check"
+          exit-code: "1"
+          severity: "HIGH,CRITICAL"

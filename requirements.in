@@ -1,0 +1,62 @@
+# DWITP Core Dependencies
+# Run: pip-compile --generate-hashes requirements.in -o requirements.txt
+
+# HTTP & Crawling
+requests>=2.31.0
+beautifulsoup4>=4.12.2
+lxml>=5.1.0
+stem>=1.8.2
+PySocks>=1.7.1
+
+# Data & Validation
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Analysis
+spacy>=3.7.5
+transformers>=4.36.0
+
+# Database
+psycopg2-binary>=2.9.9
+# OpenSearch client (NOT elasticsearch-py — its v8/v9 reject OpenSearch 2.x with
+# an HTTP 406 compatibility-header error). Regenerate requirements.txt with
+# pip-compile to pick this up; until then it is installed directly in the
+# db_writer/dashboard images.
+opensearch-py>=2.4.0,<3
+neo4j>=5.17.0
+
+# Graph analytics (INTEL-002 Phase 3) — SNA metrics (PageRank, betweenness,
+# Louvain) computed in-process; avoids the Neo4j GDS plugin. scipy backs
+# networkx's pagerank. Installed directly in the graph_analytics image until
+# requirements.txt is regenerated.
+networkx>=3.2,<4
+scipy>=1.11,<2
+
+# Message Queue
+pika>=1.3.2
+
+# Telegram collection (INTEL-002) — MTProto user-client, READ-ONLY usage only.
+# Installed directly in the telegram_collector image until requirements.txt is
+# regenerated with pip-compile (hash-locked file does not pin it yet).
+telethon>=1.34,<2
+
+# Dashboard
+fastapi>=0.104.0
+uvicorn>=0.24.0
+httptools>=0.6.0
+watchfiles>=0.21.0
+websockets>=12.0
+jinja2>=3.1.2
+python-multipart>=0.0.6
+httpx>=0.25.0
+
+# Utilities
+python-dotenv>=1.0.0
+orjson>=3.9.10
+pyyaml>=6.0.2
+setuptools>=65.0.0
+itsdangerous>=2.1.2
+cryptography>=41.0.0
+
+
+

@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dwitp"
+version = "0.1.0"
+description = "Dark Web Intelligence & Threat Monitoring Platform"
+requires-python = ">=3.12"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+skips = []
+
+[tool.semgrep]
+configs = ["p/python", "p/security-audit"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "S", "B"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short -p no:cacheprovider --basetemp=%TEMP%\\dwitp-pytest"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["*/__init__.py", "src/ai_layer/*", "src/analysis/*", "src/dashboard/*", "src/db_writer/*"]
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 85
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+disallow_untyped_defs = true
+warn_unused_ignores = true

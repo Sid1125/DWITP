@@ -1,0 +1,22 @@
+SocksPort 0.0.0.0:9050
+ControlPort 0.0.0.0:9051
+DataDirectory /tmp/tor
+
+# Security hardening
+ExitPolicy reject *:*
+ExitRelay 0
+BridgeRelay 0
+DirCache 0
+AvoidDiskWrites 1
+
+# Circuit isolation
+CircuitBuildTimeout 30
+LearnCircuitBuildTimeout 0
+MaxCircuitDirtiness 600
+
+# Authentication
+#HashedControlPassword (replaced by entrypoint.sh with hashed password)
+CookieAuthentication 0
+
+# Logging
+Log notice stdout

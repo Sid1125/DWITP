@@ -1,0 +1,127 @@
+# DWITP Source Registry
+# ======================
+# Every source must be explicitly approved before crawling.
+# Add entries here and commit. No runtime additions.
+#
+# Schema:
+#   source_id:       Unique identifier (e.g., "dread_forum")
+#   url:             Full .onion URL
+#   category:        forum | search_engine | ransomware_tracking | paste | marketplace
+#   status:          approved | pending | retired | quarantined
+#   approved_by:     Reviewer name
+#   approved_date:   ISO date (YYYY-MM-DD)
+#   approval_signature: Reviewer's PGP signature or verification reference
+#   risk_level:      low | medium | high
+#   review_notes:    Free-text notes from review
+#   last_reviewed:   ISO date of last review
+#
+# Only entries with status: "approved" will be crawled.
+
+sources:
+  - source_id: dread
+    url: "http://dreadytofatroptsdj6io7l3xptbet6onoyno2yv7jicoxknyazubrad.onion/"
+    category: forum
+    status: approved
+    approved_by: siddharth
+    approved_date: "2026-06-08"
+    approval_signature: manual-review
+    review_notes: "Primary discussion forum for threat intelligence monitoring"
+    risk_level: medium
+    last_reviewed: "2026-06-08"
+    max_pages: 600
+    link_selector: "a[href*='post/'],a[href*='/u/'],a[href*='/d/']"
+    queue_wait_seconds: 25
+    # Board/community pages are re-fetched every cycle to surface new posts;
+    # individual /post/ and /u/ pages are crawled once.
+    listing_patterns: "/d/"
+  - source_id: pn5
+    url: http://pn5kem4zchjc7xuuo3ei7wqvdw6symyr2k3izfjhsdivzkv3y5yfovyd.onion
+    category: forum
+    status: retired
+    approved_by: admin
+    approved_date: '2026-06-17'
+    approval_signature: dashboard-admin-signoff
+    review_notes: Promoted from discovered candidate (found via dread)
+    risk_level: medium
+    last_reviewed: '2026-06-17'
+    max_pages: 5
+    link_selector: ''
+    queue_wait_seconds: 0
+  - source_id: dump
+    url: http://dumpliwoard5qsrrsroni7bdiishealhky4snigbzfmzcquwo3kml4id.onion
+    category: forum
+    status: approved
+    approved_by: admin
+    approved_date: '2026-06-17'
+    approval_signature: dashboard-admin-signoff
+    review_notes: Promoted from discovered candidate (found via dread)
+    risk_level: medium
+    last_reviewed: '2026-06-17'
+    max_pages: 5
+    link_selector: ''
+    queue_wait_seconds: 0
+  - source_id: 53x
+    url: http://53xjwdhry2aoqmysvqetzttgusriix3v2akgrzd4k5tvoqqvsfzxb6yd.onion
+    category: forum
+    status: retired
+    approved_by: admin
+    approved_date: '2026-06-17'
+    approval_signature: dashboard-admin-signoff
+    review_notes: Promoted from discovered candidate (found via dread)
+    risk_level: medium
+    last_reviewed: '2026-06-17'
+    max_pages: 5
+    link_selector: ''
+    queue_wait_seconds: 0
+  - source_id: 7x
+    url: http://7xktb2noofpx7vqom5d6b4gub6wi2znkfhbowtv2xxkbx63simfj3bqd.onion
+    category: forum
+    status: retired
+    approved_by: admin
+    approved_date: '2026-06-17'
+    approval_signature: dashboard-admin-signoff
+    review_notes: Promoted from discovered candidate (found via dread)
+    risk_level: medium
+    last_reviewed: '2026-06-17'
+    max_pages: 5
+    link_selector: ''
+    queue_wait_seconds: 0
+  - source_id: fg2
+    url: http://fg2lhfhgjrfz4oywqy2mfwfehhqsjse6wyrtdczsrhtves2jofi2qpad.onion
+    category: forum
+    status: retired
+    approved_by: admin
+    approved_date: '2026-06-17'
+    approval_signature: dashboard-admin-signoff
+    review_notes: Promoted from discovered candidate (found via dread)
+    risk_level: medium
+    last_reviewed: '2026-06-17'
+    max_pages: 5
+    link_selector: ''
+    queue_wait_seconds: 0
+  - source_id: xmrbazaar
+    url: http://xmrbazaar6wzcr3wvj4anpnfwv5tcikgdurtzzfba233g52fa2fjx3qd.onion
+    category: marketplace
+    status: retired
+    approved_by: admin
+    approved_date: '2026-06-17'
+    approval_signature: dashboard-admin-signoff
+    review_notes: Promoted from discovered candidate (found via dread)
+    risk_level: medium
+    last_reviewed: '2026-06-17'
+    max_pages: 5
+    link_selector: ''
+    queue_wait_seconds: 0
+  - source_id: opbible
+    url: http://opbible7nans45sg33cbyeiwqmlp5fu7lklu6jd6f3mivrjeqadco5yd.onion
+    category: forum
+    status: retired
+    approved_by: admin
+    approved_date: '2026-06-17'
+    approval_signature: dashboard-admin-signoff
+    review_notes: Promoted from discovered candidate (found via dread)
+    risk_level: medium
+    last_reviewed: '2026-06-17'
+    max_pages: 5
+    link_selector: ''
+    queue_wait_seconds: 0

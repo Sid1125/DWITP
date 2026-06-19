@@ -1,0 +1,672 @@
+x-security-base: &security-base
+  security_opt:
+    - no-new-privileges:true
+    - seccomp:../config/seccomp/python.json
+  cap_drop:
+    - ALL
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,noexec,nosuid,nodev,uid=1000
+    - /var/log:size=32m,noexec,nosuid,nodev,uid=1000
+  restart: "no"
+
+x-logging-base: &logging-base
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
+      compress: "true"
+
+networks:
+  tor_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+  queue_net:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24
+  db_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.22.0.0/24
+
+
+services:
+  # ─── TLS Init (one-shot cert generator) ───────────────────────
+  tls-init:
+    build:
+      context: docker/tls-init
+    image: dwitp/tls-init:latest
+    container_name: dwitp-tls-init
+    volumes:
+      - tls_data:/etc/dwitp/tls
+    restart: "no"
+    mem_limit: 128m
+    cpus: "0.25"
+    <<: *logging-base
+
+  # ─── Tor Gateway ───────────────────────────────────────────────
+  tor:
+    build:
+      context: docker/tor
+    image: dwitp/tor:latest
+    container_name: dwitp-tor
+    networks:
+      tor_net:
+        ipv4_address: 172.20.0.2
+    read_only: true
+    tmpfs:
+      # Tor's DataDirectory (consensus + microdescriptor cache) lives on this tmpfs
+      # (torrc: DataDirectory /tmp/tor). 64m was already at 45% sitting idle and hit
+      # 100% during a fresh descriptor download burst ("No space left on device").
+      - /tmp:size=128m,noexec,nosuid,nodev,uid=1000
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    restart: always
+    mem_limit: 256m
+    cpus: "0.5"
+    ports:
+      - "127.0.0.1:9050:9050"
+      - "127.0.0.1:9051:9051"
+    environment:
+      TOR_CONTROL_PASSWORD: ${TOR_CONTROL_PASSWORD:-}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ─── Message Queue (TLS) ─────────────────────────────────────
+  rabbitmq:
+    build:
+      context: ..
+      dockerfile: infra/docker/rabbitmq/Dockerfile
+    image: dwitp/rabbitmq:latest
+    container_name: dwitp-rabbitmq
+    networks:
+      queue_net:
+        ipv4_address: 172.21.0.2
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-dwitp}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?err}
+      RABBITMQ_DEFAULT_VHOST: /dwitp
+    volumes:
+      - tls_data:/etc/dwitp/tls
+    read_only: true
+    tmpfs:
+      - /var/lib/rabbitmq:size=256m,noexec,nosuid,nodev
+      - /etc/rabbitmq:size=1m,noexec,nosuid,nodev
+      - /var/log/rabbitmq:size=64m,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - CHOWN
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    restart: always
+    mem_limit: 512m
+    cpus: "1.0"
+    depends_on:
+      tls-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "su-exec rabbitmq rabbitmq-diagnostics status"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    <<: *logging-base
+
+  # ─── PostgreSQL (TLS) ─────────────────────────────────────────
+  postgres:
+    build:
+      context: ..
+      dockerfile: infra/docker/postgres/Dockerfile
+    image: dwitp/postgres:latest
+    container_name: dwitp-postgres
+    networks:
+      db_net:
+        ipv4_address: 172.22.0.2
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-dwitp}
+      POSTGRES_USER: ${POSTGRES_USER:-dwitp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?err}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data:rw
+      - ../scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+      - tls_data:/etc/dwitp/tls
+      - ../infra/docker/postgres/ssl.conf:/etc/postgresql/ssl.conf:ro
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    # "always" (not "unless-stopped") so the daemon brings postgres back after a
+    # host sleep/resume even if it was in an exited state — "unless-stopped"
+    # skips containers that were down when the daemon restarted, which is the
+    # laptop-recharge failure mode.
+    restart: always
+    mem_limit: 1g
+    cpus: "2.0"
+    depends_on:
+      tls-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dwitp}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    <<: *logging-base
+
+  # ─── OpenSearch ────────────────────────────────────────────────
+  opensearch:
+    image: opensearchproject/opensearch:2.14.0
+    container_name: dwitp-opensearch
+    networks:
+      db_net:
+        ipv4_address: 172.22.0.3
+    environment:
+      discovery.type: single-node
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${OPENSEARCH_PASSWORD:?err}
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data:rw
+    cap_drop:
+      - ALL
+    cap_add:
+      - IPC_LOCK
+      - SYS_CHROOT
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    restart: always
+    mem_limit: 2g
+    cpus: "2.0"
+    <<: *logging-base
+
+  # ─── Neo4j (bolt+TLS) ────────────────────────────────────────
+  neo4j:
+    image: neo4j:5.20-community
+    container_name: dwitp-neo4j
+    networks:
+      db_net:
+        ipv4_address: 172.22.0.4
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?err}
+      NEO4J_dbms_security_procedures_unrestricted: ""
+      # Bolt must listen on all interfaces so other containers (db_writer) can
+      # reach it; the default binds to localhost only, which is why every graph
+      # write got "Connection refused".
+      NEO4J_server_default__listen__address: "0.0.0.0"
+      NEO4J_server_memory_heap_max__size: "1G"
+      # Make the bolt connector actually negotiate TLS using the policy below.
+      # Without this the level defaults to DISABLED (plaintext), so the bolt+ssc://
+      # clients' TLS handshake gets an EOF.
+      NEO4J_server_bolt_tls__level: "OPTIONAL"
+      NEO4J_dbms_ssl_policy_bolt_enabled: "true"
+      NEO4J_dbms_ssl_policy_bolt_base__directory: "/etc/dwitp/tls/neo4j"
+      NEO4J_dbms_ssl_policy_bolt_private__key: "private.key"
+      NEO4J_dbms_ssl_policy_bolt_public__certificate: "public.crt"
+    volumes:
+      - neo4j_data:/data:rw
+      - tls_data:/etc/dwitp/tls:ro
+      - ./docker/neo4j/entrypoint.sh:/entrypoint.sh:ro
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+      - CHOWN
+    security_opt:
+      - no-new-privileges:true
+    restart: always
+    mem_limit: 2g
+    cpus: "2.0"
+    entrypoint: ["/entrypoint.sh"]
+    command: ["neo4j"]
+    depends_on:
+      tls-init:
+        condition: service_completed_successfully
+    <<: *logging-base
+
+  # ─── Crawler ───────────────────────────────────────────────────
+  crawler:
+    build:
+      context: ..
+      dockerfile: infra/docker/crawler/Dockerfile
+    image: dwitp/crawler:latest
+    container_name: dwitp-crawler
+    networks:
+      tor_net:
+        ipv4_address: 172.20.0.10
+      queue_net:
+        ipv4_address: 172.21.0.10
+    environment:
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
+      TOR_PROXY_HOST: tor
+      TOR_PROXY_PORT: "9050"
+      TOR_CONTROL_PORT: "9051"
+      TOR_CONTROL_PASSWORD: ${TOR_CONTROL_PASSWORD:-}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-dwitp}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?err}
+      RABBITMQ_USE_SSL: "true"
+      RABBITMQ_CA_CRT: /etc/dwitp/tls/ca/ca.crt
+      RABBITMQ_CLIENT_CRT: /etc/dwitp/tls/crawler/crawler.crt
+      RABBITMQ_CLIENT_KEY: /etc/dwitp/tls/crawler/crawler.key
+      AUDIT_ENCRYPTION_KEY: ${AUDIT_ENCRYPTION_KEY:?err}
+      DWITP_AUDIT_LOG: /var/log/dwitp/audit.log
+      SOURCES_CONFIG: /app/config/sources.yaml
+      CRAWLER_IDENTITY: ${CRAWLER_IDENTITY:-crawler-01}
+      CIRCUIT_ROTATION_INTERVAL: ${CIRCUIT_ROTATION_INTERVAL:-15}
+      DREAD_USERNAME: ${DREAD_USERNAME:-}
+      DREAD_PASSWORD: ${DREAD_PASSWORD:-}
+      DREAD_COOKIES_FILE: /var/log/dwitp/dread_cookies.txt
+    volumes:
+      - type: bind
+        source: ../config/sources.yaml
+        target: /app/config/sources.yaml
+        read_only: true
+      - tls_data:/etc/dwitp/tls:ro
+      - crawler_state:/var/lib/dwitp
+      - type: bind
+        source: ../config/dread_cookies.txt
+        target: /var/log/dwitp/dread_cookies.txt
+        read_only: true
+    restart: always
+    mem_limit: 256m
+    cpus: "0.5"
+    tmpfs:
+      - /var/log/dwitp:size=8m,noexec,nosuid,nodev,uid=1000
+    cap_add:
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:../config/seccomp/python.json
+    depends_on:
+      tor:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    <<: [*security-base, *logging-base]
+
+  # ─── Sanitizer ─────────────────────────────────────────────────
+  sanitizer:
+    build:
+      context: ..
+      dockerfile: infra/docker/sanitizer/Dockerfile
+    image: dwitp/sanitizer:latest
+    container_name: dwitp-sanitizer
+    networks:
+      queue_net:
+        ipv4_address: 172.21.0.11
+    environment:
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-dwitp}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?err}
+      RABBITMQ_USE_SSL: "true"
+      RABBITMQ_CA_CRT: /etc/dwitp/tls/ca/ca.crt
+      RABBITMQ_CLIENT_CRT: /etc/dwitp/tls/sanitizer/sanitizer.crt
+      RABBITMQ_CLIENT_KEY: /etc/dwitp/tls/sanitizer/sanitizer.key
+      AUDIT_ENCRYPTION_KEY: ${AUDIT_ENCRYPTION_KEY:?err}
+      DWITP_AUDIT_LOG: /var/log/dwitp/audit.log
+    restart: always
+    mem_limit: 256m
+    cpus: "0.5"
+    volumes:
+      - tls_data:/etc/dwitp/tls:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    <<: [*security-base, *logging-base]
+
+  # ─── Analysis ──────────────────────────────────────────────────
+  analysis:
+    build:
+      context: ..
+      dockerfile: infra/docker/analysis/Dockerfile
+    image: dwitp/analysis:latest
+    container_name: dwitp-analysis
+    networks:
+      queue_net:
+        ipv4_address: 172.21.0.12
+    environment:
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-dwitp}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?err}
+      RABBITMQ_USE_SSL: "true"
+      RABBITMQ_CA_CRT: /etc/dwitp/tls/ca/ca.crt
+      RABBITMQ_CLIENT_CRT: /etc/dwitp/tls/analysis/analysis.crt
+      RABBITMQ_CLIENT_KEY: /etc/dwitp/tls/analysis/analysis.key
+      AUDIT_ENCRYPTION_KEY: ${AUDIT_ENCRYPTION_KEY:?err}
+      DWITP_AUDIT_LOG: /var/log/dwitp/audit.log
+      SPACY_MODEL: en_core_web_sm
+    restart: always
+    mem_limit: 512m
+    cpus: "1.0"
+    volumes:
+      - tls_data:/etc/dwitp/tls:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    <<: [*security-base, *logging-base]
+
+  # ─── Classification Stage (deterministic interim bridge) ──────
+  # The Ollama LLM classifier (4GB model + 4 replicas, up to 120s/page) was removed
+  # as the pipeline's biggest bottleneck. This service now runs a fast, deterministic
+  # keyword-anchor pass: analysis.ready -> ai.output, no model, no ai_net. A single
+  # worker keeps up easily since classification is now sub-millisecond. The queue
+  # names (ai.output) are unchanged so db_writer needs no change. Placeholder until
+  # the replacement classification engine lands; swap classify() in ai_layer/main.py.
+  ai_layer:
+    build:
+      context: ..
+      dockerfile: infra/docker/ai_layer/Dockerfile
+    image: dwitp/ai-layer:latest
+    container_name: dwitp-ai-layer
+    networks:
+      queue_net:
+        ipv4_address: 172.21.0.13
+    environment:
+      PYTHONPATH: /app
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-dwitp}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?err}
+      RABBITMQ_USE_SSL: "true"
+      RABBITMQ_CA_CRT: /etc/dwitp/tls/ca/ca.crt
+      RABBITMQ_CLIENT_CRT: /etc/dwitp/tls/ai_layer/ai_layer.crt
+      RABBITMQ_CLIENT_KEY: /etc/dwitp/tls/ai_layer/ai_layer.key
+      PYTHONUNBUFFERED: "1"
+      AUDIT_ENCRYPTION_KEY: ${AUDIT_ENCRYPTION_KEY:?err}
+      DWITP_AUDIT_LOG: /var/log/dwitp/audit.log
+      PI_CAMPAIGN_THRESHOLD: ${PI_CAMPAIGN_THRESHOLD:-5}
+    restart: always
+    mem_limit: 256m
+    cpus: "0.5"
+    volumes:
+      - tls_data:/etc/dwitp/tls:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    <<: [*security-base, *logging-base]
+
+  # ─── Dashboard ─────────────────────────────────────────────────
+  dashboard:
+    build:
+      context: ..
+      dockerfile: infra/docker/dashboard/Dockerfile
+    image: dwitp/dashboard:latest
+    container_name: dwitp-dashboard
+    ports:
+      - "127.0.0.1:8079:8080"
+    environment:
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-dwitp}
+      POSTGRES_USER: ${POSTGRES_USER:-dwitp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?err}
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: "9200"
+      OPENSEARCH_USER: admin
+      OPENSEARCH_PASSWORD: ${OPENSEARCH_PASSWORD:?err}
+      NEO4J_URI: bolt+ssc://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?err}
+      DASHBOARD_HOST: "0.0.0.0"
+      DASHBOARD_PORT: "8080"
+      DASHBOARD_SECRET_KEY: ${DASHBOARD_SECRET_KEY:?err}
+      DASHBOARD_USERNAME: ${DASHBOARD_USERNAME:-analyst}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:?err}
+      DASHBOARD_USE_HTTPS: ${DASHBOARD_USE_HTTPS:-true}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      SOURCES_CONFIG: /app/config/sources.yaml
+      AUDIT_ENCRYPTION_KEY: ${AUDIT_ENCRYPTION_KEY:?err}
+      DWITP_AUDIT_LOG: /var/log/dwitp/audit.log
+      # Needed only so the Admin Panel can broadcast the AI processing kill switch
+      # (control.ai fanout exchange) — queue_net is internal:true (no internet egress),
+      # and no client cert is required since RabbitMQ's fail_if_no_peer_cert=false; auth
+      # is still via the existing shared RABBITMQ_USER/PASSWORD.
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-dwitp}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?err}
+      RABBITMQ_USE_SSL: "true"
+      RABBITMQ_CA_CRT: /etc/dwitp/tls/ca/ca.crt
+    restart: always
+    mem_limit: 256m
+    cpus: "0.5"
+    volumes:
+      - tls_data:/etc/dwitp/tls:ro
+      # rw (unlike the crawler's ro mount of the same host file) so the Admin Panel can
+      # append an approved source. INV-04 is preserved at the application layer: the
+      # dashboard only ever appends here from /admin/sources/{id}/approve, which requires
+      # the separate admin login and an already-staged, human-reviewed pending_sources row.
+      - type: bind
+        source: ../config/sources.yaml
+        target: /app/config/sources.yaml
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev,uid=1000
+      - /app/certs:size=1m,noexec,nosuid,nodev,uid=1000
+      - /tmp/dwitp-dashboard-templates:size=1m,noexec,nosuid,nodev,uid=1000
+      - /var/log/dwitp:size=8m,noexec,nosuid,nodev,uid=1000
+    networks:
+      # Pin a static IP so the dashboard can never squat a backend's pinned
+      # address (postgres .2 / opensearch .3 / neo4j .4) when it restarts first
+      # after a host resume — that squat is what blocks postgres from coming
+      # back up and leaves the dashboard crash-looping on "host name postgres".
+      db_net:
+        ipv4_address: 172.22.0.20
+      queue_net:
+        ipv4_address: 172.21.0.16
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_started
+      neo4j:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    <<: [*security-base, *logging-base]
+
+  # ─── DB Writer (pipeline consumer) ─────────────────────────────
+  db_writer:
+    build:
+      context: ..
+      dockerfile: infra/docker/db_writer/Dockerfile
+    image: dwitp/db-writer:latest
+    container_name: dwitp-db-writer
+    networks:
+      queue_net:
+        ipv4_address: 172.21.0.14
+      db_net:
+        ipv4_address: 172.22.0.11
+    environment:
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-dwitp}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?err}
+      RABBITMQ_USE_SSL: "true"
+      RABBITMQ_CA_CRT: /etc/dwitp/tls/ca/ca.crt
+      RABBITMQ_CLIENT_CRT: /etc/dwitp/tls/db_writer/db_writer.crt
+      RABBITMQ_CLIENT_KEY: /etc/dwitp/tls/db_writer/db_writer.key
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-dwitp}
+      POSTGRES_USER: ${POSTGRES_USER:-dwitp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?err}
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: "9200"
+      OPENSEARCH_USER: admin
+      OPENSEARCH_PASSWORD: ${OPENSEARCH_PASSWORD:?err}
+      NEO4J_URI: bolt+ssc://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?err}
+      AUDIT_ENCRYPTION_KEY: ${AUDIT_ENCRYPTION_KEY:?err}
+      DWITP_AUDIT_LOG: /var/log/dwitp/audit.log
+    restart: always
+    mem_limit: 256m
+    cpus: "0.5"
+    volumes:
+      - tls_data:/etc/dwitp/tls:ro
+      - ../config/sources.yaml:/app/config/sources.yaml:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_started
+      neo4j:
+        condition: service_started
+    <<: [*security-base, *logging-base]
+
+  # ─── Telegram Collector (INTEL-002, observation-only) ─────────
+  # Read-only MTProto ingestion of APPROVED telegram_groups. No send path, no
+  # infiltration tooling (TG-G3 / ARCH-001). Egresses via the Tor gateway for
+  # OPSEC, same as the crawler. Idles until TELEGRAM_API_ID/HASH/SESSION are
+  # supplied out-of-band AND a group is approved with a legal_basis_ref.
+  telegram_collector:
+    build:
+      context: ..
+      dockerfile: infra/docker/telegram_collector/Dockerfile
+    image: dwitp/telegram-collector:latest
+    container_name: dwitp-telegram-collector
+    networks:
+      tor_net:
+        ipv4_address: 172.20.0.11
+      queue_net:
+        ipv4_address: 172.21.0.19
+      db_net:
+        ipv4_address: 172.22.0.21
+    environment:
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
+      # Egress through Tor (OPSEC). Set TELEGRAM_USE_TOR=false to go direct.
+      TELEGRAM_USE_TOR: ${TELEGRAM_USE_TOR:-true}
+      TOR_PROXY_HOST: tor
+      TOR_PROXY_PORT: "9050"
+      # Telegram app credentials + an AUTHORIZED user session string. Provisioned
+      # out-of-band via the secret store; NEVER committed. Empty -> collector idles.
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
+      TELEGRAM_SESSION: ${TELEGRAM_SESSION:-}
+      TELEGRAM_HISTORY_LIMIT: ${TELEGRAM_HISTORY_LIMIT:-500}
+      TELEGRAM_POLL_INTERVAL: ${TELEGRAM_POLL_INTERVAL:-300}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-dwitp}
+      POSTGRES_USER: ${POSTGRES_USER:-dwitp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?err}
+      # CA-only TLS to RabbitMQ (no client cert needed; same as the dashboard).
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-dwitp}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?err}
+      RABBITMQ_USE_SSL: "true"
+      RABBITMQ_CA_CRT: /etc/dwitp/tls/ca/ca.crt
+      AUDIT_ENCRYPTION_KEY: ${AUDIT_ENCRYPTION_KEY:?err}
+      DWITP_AUDIT_LOG: /var/log/dwitp/audit.log
+      COLLECTOR_STATE_FILE: /var/lib/dwitp/tg_highwater.json
+    restart: always
+    mem_limit: 512m
+    cpus: "1.0"
+    volumes:
+      - tls_data:/etc/dwitp/tls:ro
+      - collector_state:/var/lib/dwitp
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev,uid=1000
+      - /var/log/dwitp:size=8m,noexec,nosuid,nodev,uid=1000
+    depends_on:
+      tor:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    <<: [*security-base, *logging-base]
+
+  # ─── Graph Analytics (INTEL-002 Phase 3 — SNA scoring) ────────
+  # Computes PageRank / betweenness / Louvain / in-reply over the Telegram actor
+  # graph and writes influence_score + orchestrator_likelihood back to
+  # telegram_actors and the Neo4j nodes. networkx in-process (no GDS plugin).
+  graph_analytics:
+    build:
+      context: ..
+      dockerfile: infra/docker/graph_analytics/Dockerfile
+    image: dwitp/graph-analytics:latest
+    container_name: dwitp-graph-analytics
+    networks:
+      db_net:
+        ipv4_address: 172.22.0.22
+    environment:
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-dwitp}
+      POSTGRES_USER: ${POSTGRES_USER:-dwitp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?err}
+      NEO4J_URI: bolt+ssc://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?err}
+      GRAPH_ANALYTICS_INTERVAL: ${GRAPH_ANALYTICS_INTERVAL:-300}
+      AUDIT_ENCRYPTION_KEY: ${AUDIT_ENCRYPTION_KEY:?err}
+      DWITP_AUDIT_LOG: /var/log/dwitp/audit.log
+    restart: always
+    mem_limit: 512m
+    cpus: "1.0"
+    volumes:
+      - tls_data:/etc/dwitp/tls:ro
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev,uid=1000
+      - /var/log/dwitp:size=8m,noexec,nosuid,nodev,uid=1000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_started
+    <<: [*security-base, *logging-base]
+
+volumes:
+  postgres_data:
+    driver: local
+  opensearch_data:
+    driver: local
+  neo4j_data:
+    driver: local
+  tls_data:
+    driver: local
+  crawler_state:
+    driver: local
+  collector_state:
+    driver: local

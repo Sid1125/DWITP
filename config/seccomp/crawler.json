@@ -1,0 +1,26 @@
+{
+	"defaultAction": "SCMP_ACT_ERRNO",
+	"architectures": ["SCMP_ARCH_X86_64"],
+	"syscalls": [
+		{"names": ["read", "write", "close", "fstat", "lseek", "pread64", "pwrite64"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["mmap", "munmap", "mprotect", "brk", "sbrk"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["exit_group", "exit", "rt_sigreturn", "nanosleep"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["openat", "readlinkat", "faccessat", "newfstatat"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["socket", "connect", "sendto", "recvfrom", "bind", "getsockname"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["epoll_create1", "epoll_ctl", "epoll_pwait", "eventfd2"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["clock_gettime", "getrandom", "getpid", "gettid", "tgkill"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["clone", "clone3", "fork", "vfork"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["futex", "set_robust_list"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["writev", "readv"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["dup", "dup2", "dup3", "fcntl"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["pipe", "pipe2"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["statx", "statfs", "fstatfs", "fsmount", "fsconfig", "fsopen", "fspick", "getdents", "getdents64", "open_tree", "move_mount", "execve", "execveat"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["accept", "accept4", "listen", "getsockopt", "setsockopt"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["recvmsg", "sendmsg", "recvmmsg", "sendmmsg"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["uname", "sysinfo", "prlimit64"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["rt_sigaction", "rt_sigprocmask", "sigaltstack"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["seccomp"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["arch_prctl", "set_tid_address"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["pselect6", "select", "poll", "ppoll"], "action": "SCMP_ACT_ALLOW"}
+	]
+}
