@@ -82,19 +82,5 @@ infra/*.json
 ~$*.xlsx
 ~WRL*.tmp
 
-# Design & governance docs (generated/static snapshots — not source code)
-AI-001_AI_Governance_and_Safety.md
-ARCH-001_System_Architecture.md
-DEV-001_Development_Standard.md
-Dwitp_vibe_security_spec.md
-INTEL-001_Intelligence_Requirements.md
-INTEL-002_Telegram_Group_Intelligence.md
-IR-001_Incident_Response_Playbook.md
-PRESENTATION.md
-TELEGRAM.md
-THREAT_LEXICON.md
-features.md
-DWITP_Project_Report.docx
-
 # Session context (auto-generated)
 DWITP_context.md
