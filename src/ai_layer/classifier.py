@@ -872,6 +872,18 @@ NEGATIVE_MARKERS: List[Tuple[str, float]] = [
     ("vulnerability disclosure", 1.0), ("cve database", 1.2), ("security research", 1.0),
     ("incident report", 0.8), ("law enforcement", 0.8), ("prevention", 0.6),
     ("how to report", 1.0), ("tip line", 1.0),
+    # News / research / law-enforcement reporting context. APT/gang/malware NAMES are
+    # great recall signals on a criminal forum but appear constantly in security news,
+    # blog write-ups, and arrest announcements — which are NOT findings. A real
+    # marketplace listing never says "were arrested" / "researchers report" / "takedown".
+    ("security researcher", 1.2), ("security researchers", 1.3), ("researchers report", 1.3),
+    ("threat researcher", 1.0), ("advisory published", 1.2), ("CISA advisory", 1.4),
+    ("were arrested", 1.5), ("was arrested", 1.4), ("arrested", 0.7), ("indicted", 1.2),
+    ("sentenced to", 1.0), ("pleaded guilty", 1.2), ("law enforcement operation", 1.5),
+    ("takedown operation", 1.5), ("takedown", 0.9), ("dismantled", 1.1), ("seized by", 1.0),
+    ("according to", 0.6), ("attributed to", 1.0), ("we assess", 1.0), ("our analysis", 0.9),
+    ("indicators of compromise", 1.1), ("mitre att&ck", 1.0), ("blog post", 0.7),
+    ("press release", 1.0), ("threat report", 1.0), ("victimology", 1.0),
 ]
 _NEG_REGEX: List[Tuple["re.Pattern[str]", float]] = [
     (_compile_phrase(p), w) for p, w in NEGATIVE_MARKERS
