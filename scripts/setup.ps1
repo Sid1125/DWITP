@@ -1,78 +1,74 @@
-# DWITP Setup Script (Windows / PowerShell)
-# Prerequisites: Docker Desktop, Python 3.12+, Git
-# Run from repository root: .\scripts\setup.ps1
-
+# DWITP Setup — Windows / PowerShell
+# Prerequisites: Docker Desktop (with the WSL2 backend running), Git.
+#                Python 3.12+ only needed for the optional local test env.
+# Run from the repository root:  .\scripts\setup.ps1
 $ErrorActionPreference = "Stop"
-$Root = Resolve-Path "$PSScriptRoot\.."
+$Root = (Resolve-Path "$PSScriptRoot\..").Path
+$EnvFile = Join-Path $Root "infra\.env"
 
 Write-Host "=== DWITP Setup ===" -ForegroundColor Cyan
 
-# 1. Check prerequisites
-Write-Host "[1/6] Checking prerequisites..." -ForegroundColor Yellow
+# ── Step 1: Prerequisites ──────────────────────────────────────────
+Write-Host "[1/3] Checking prerequisites..." -ForegroundColor Yellow
+try { $null = docker --version } catch { Write-Error "Docker is required. Install Docker Desktop and start it."; exit 1 }
+try { $null = docker compose version } catch { Write-Error "The Docker Compose plugin is required ('docker compose')."; exit 1 }
+try { $null = docker info } catch { Write-Error "The Docker daemon is not running. Start Docker Desktop and retry."; exit 1 }
+Write-Host "  Docker:  $(docker --version)"
 
-$dockerOk = $null
-try { $dockerOk = docker --version } catch {}
-if (-not $dockerOk) {
-    Write-Error "Docker is required. Install Docker Desktop first."
-    exit 1
+# ── Step 2: Environment (infra/.env) ───────────────────────────────
+Write-Host "[2/3] Generating infra/.env..." -ForegroundColor Yellow
+function New-Hex([int]$n = 24) {
+    $b = New-Object byte[] $n
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
+    ($b | ForEach-Object { $_.ToString('x2') }) -join ''
 }
-Write-Host "  Docker: $dockerOk"
-
-$pythonVersion = $null
-try { $pythonVersion = python --version } catch {}
-if (-not $pythonVersion -or $pythonVersion -notmatch "3\.12\.") {
-    try { $pythonVersion = py -3.12 --version } catch {}
-    if (-not $pythonVersion -or $pythonVersion -notmatch "3\.12\.") {
-        Write-Error "Python 3.12.x required. Install from https://www.python.org/downloads/release/python-3129/"
-        exit 1
-    }
-    function Invoke-Python { py -3.12 @args }
+function New-FernetKey {
+    $b = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
+    [Convert]::ToBase64String($b).Replace('+', '-').Replace('/', '_')   # url-safe = valid Fernet key
+}
+if (Test-Path $EnvFile) {
+    Write-Host "  infra/.env already exists - keeping it (delete it to regenerate)."
 } else {
-    function Invoke-Python { python @args }
+    $dashPw = New-Hex 24
+    $lines = @(
+        "# DWITP environment - generated $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+        "POSTGRES_PASSWORD=$(New-Hex 24)"
+        "OPENSEARCH_PASSWORD=Dw1tp-$(New-Hex 12)"
+        "NEO4J_PASSWORD=$(New-Hex 24)"
+        "RABBITMQ_PASSWORD=$(New-Hex 24)"
+        "TOR_CONTROL_PASSWORD=$(New-Hex 24)"
+        "DASHBOARD_USERNAME=analyst"
+        "DASHBOARD_PASSWORD=$dashPw"
+        "DASHBOARD_SECRET_KEY=$(New-Hex 32)"
+        "AUDIT_ENCRYPTION_KEY=$(New-FernetKey)"
+        "PI_CAMPAIGN_THRESHOLD=5"
+        "GRAPH_ANALYTICS_INTERVAL=300"
+    )
+    # WriteAllLines => UTF-8 WITHOUT BOM. Docker's .env parser chokes on a BOM, so
+    # do NOT use Set-Content/Out-File here (they emit a BOM on Windows PowerShell).
+    [System.IO.File]::WriteAllLines($EnvFile, $lines, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host "  Wrote infra/.env with fresh random secrets." -ForegroundColor Green
+    Write-Host "  Dashboard login: analyst / $dashPw" -ForegroundColor Green
 }
-Write-Host "  Python: $pythonVersion"
 
-# 2. Create Python virtual environment
-Write-Host "[2/6] Creating Python virtual environment..." -ForegroundColor Yellow
-$venvPath = "$Root\.venv"
-if (-not (Test-Path $venvPath)) {
-    Invoke-Python -m venv $venvPath
-    Write-Host "  Virtual environment created at $venvPath"
-} else {
-    Write-Host "  Virtual environment already exists"
-}
-
-# 3. Activate venv and install dependencies
-Write-Host "[3/6] Installing Python dependencies..." -ForegroundColor Yellow
-& "$venvPath\Scripts\pip" install --upgrade pip
-& "$venvPath\Scripts\pip" install -r "$Root\requirements.in"
-& "$venvPath\Scripts\pip" install pip-tools
-& "$venvPath\Scripts\pip-compile" --generate-hashes "$Root\requirements.in" -o "$Root\requirements.txt"
-& "$venvPath\Scripts\pip" install --require-hashes -r "$Root\requirements.txt"
-
-# 4. Download spaCy model
-Write-Host "[4/6] Downloading spaCy model..." -ForegroundColor Yellow
-& "$venvPath\Scripts\python" -m spacy download en_core_web_sm
-
-# 5. Build Docker images
-Write-Host "[5/6] Building Docker images..." -ForegroundColor Yellow
-Set-Location $Root
-docker compose -f infra/docker-compose.yml --env-file .env build
-
-# 6. Copy .env.example if .env doesn't exist
-Write-Host "[6/6] Setting up environment..." -ForegroundColor Yellow
-if (-not (Test-Path "$Root\.env")) {
-    Copy-Item "$Root\.env.example" "$Root\.env"
-    Write-Host "  Created .env from .env.example - update passwords before deploying!"
-} else {
-    Write-Host "  .env already exists"
-}
+# ── Step 3: Build images ───────────────────────────────────────────
+Write-Host "[3/3] Building Docker images (first build downloads base images)..." -ForegroundColor Yellow
+# --env-file is explicit so the build resolves vars regardless of the caller's CWD.
+docker compose --env-file "$EnvFile" -f "$Root\infra\docker-compose.yml" build
+Write-Host "  Images built." -ForegroundColor Green
 
 Write-Host ""
-Write-Host "=== Setup Complete ===" -ForegroundColor Green
+Write-Host "=== Setup complete ===" -ForegroundColor Green
 Write-Host ""
-Write-Host "Next steps:"
-Write-Host "  1. Edit .env with secure passwords"
-Write-Host "  2. Start services: docker compose -f infra/docker-compose.yml --env-file .env up -d"
-Write-Host "  3. Access dashboard at http://localhost:8080"
-Write-Host "  4. Activate venv: .\.venv\Scripts\Activate.ps1"
+Write-Host "Start the stack:"
+Write-Host "  cd infra; docker compose up -d"
+Write-Host ""
+Write-Host "  Dashboard:  https://127.0.0.1:8079   (self-signed cert - accept the warning)"
+Write-Host "  Login:      analyst / (DASHBOARD_PASSWORD in infra\.env)"
+Write-Host "  Logs:       cd infra; docker compose logs -f"
+Write-Host "  Stop:       cd infra; docker compose down        (add -v to wipe all data)"
+Write-Host ""
+Write-Host "(Optional) local test env - only needed for pytest, not to run the stack:"
+Write-Host "  py -3.12 -m venv .venv; .\.venv\Scripts\Activate.ps1"
+Write-Host "  pip install -r requirements.in; python -m spacy download en_core_web_sm; pytest tests\"
